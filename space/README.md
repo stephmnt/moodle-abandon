@@ -5,7 +5,7 @@ colorFrom: blue
 colorTo: indigo
 sdk: gradio
 sdk_version: 6.28.0
-python_version: "3.13"
+python_version: "3.12.12"
 app_file: app.py
 short_description: "Abandon à 28 jours : données synthétiques et SHAP"
 ---
@@ -49,7 +49,7 @@ Aucune alerte automatique n’est déclenchée.
 
 ## Exécution
 
-Python 3.13 et les dépendances de `requirements.txt` sont nécessaires.
+Python 3.12.12 et les dépendances de `requirements.txt` sont nécessaires.
 Depuis la racine du dossier :
 
 ```sh
