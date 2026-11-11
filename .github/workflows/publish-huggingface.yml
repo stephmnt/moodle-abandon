@@ -13,12 +13,10 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     env:
       HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
       HF_HUB_DISABLE_TELEMETRY: "1"
-      GRADIO_ANALYTICS_ENABLED: "False"
-      MPLBACKEND: Agg
     steps:
       - uses: actions/checkout@v6
         with:
@@ -26,78 +24,74 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12.12"
+          python-version: "3.12"
 
-      - name: Préparer les trois fichiers et les dépendances
+      - name: Valider la démonstration statique
         run: |
-          python -m pip install pyarrow==26.0.0
+          python -m pip install huggingface-hub==1.33.0
           python - <<'PY'
-          import json, os, shutil
+          import json, math
+          from html.parser import HTMLParser
           from pathlib import Path
-          import pyarrow.parquet as pq
-          source = Path('space')
-          required = {'app.py', 'demo.parquet', 'README.md'}
-          if {p.name for p in source.iterdir() if p.is_file()} != required:
-              raise SystemExit('Le dossier space doit contenir app.py, demo.parquet et README.md.')
-          target = Path(os.environ['RUNNER_TEMP']) / 'hf-space'
-          target.mkdir()
-          for name in required:
-              shutil.copy2(source / name, target / name)
-          metadata = pq.read_schema(target / 'demo.parquet').metadata
-          info = json.loads(metadata[b'moodle_extract'])
-          if info.get('format_version') != 2 or b'moodle_model' not in metadata:
-              raise SystemExit('Régénérez le Parquet au format autonome.')
-          (target / 'requirements.txt').write_text('\n'.join(info['requirements']) + '\n')
-          PY
-          python -m pip install -r "$RUNNER_TEMP/hf-space/requirements.txt"
-
-      - name: Tester le dossier autonome
-        run: |
-          cd "$RUNNER_TEMP/hf-space"
-          python - <<'PY'
-          import runpy
-          import numpy as np
-          from gradio_client import Client
-          a = runpy.run_path('app.py')
-          assert a['SCORES'].formation.notna().all()
-          assert len(a['SCORES']) == int(a['EVALUATION'].iloc[0]['n'])
-          demo = a['create_app']()
-          demo.launch(server_name='127.0.0.1', prevent_thread_lock=True,
-                      quiet=True, css=a['CSS'])
-          try:
-              client = Client(demo.local_url, verbose=False)
-              for uid in [a['EXAMPLES'][0], a['LOW_EXAMPLES'][0]]:
-                  result = client.predict(uid, api_name='/user_risk')
-                  assert str(uid) in result[0] and result[2] is not None
-              absent_id = int(a['SCORES'].userid.max()) + 1
-              assert client.predict(absent_id, api_name='/user_risk')[2] is None
-              sample = a['SCORES'].iloc[:10]
-              explanation = a['explain_rows'](sample)
-              total = explanation.base_values + explanation.values.sum(axis=1)
-              assert np.allclose(total, sample.risque_abandon_28j * 100, atol=1e-4)
-          finally:
-              demo.close()
+          import yaml
+          source = Path('space-static')
+          assert {p.name for p in source.iterdir()} == {'index.html', 'README.md'}
+          html = (source / 'index.html').read_text()
+          config = yaml.safe_load((source / 'README.md').read_text().split('---', 2)[1])
+          assert config['sdk'] == 'static' and config['app_file'] == 'index.html'
+          assert len(config['short_description']) <= 60
+          class Extract(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.capture = False
+                  self.payload = ''
+              def handle_starttag(self, tag, attrs):
+                  if tag == 'script' and dict(attrs).get('id') == 'demo-data':
+                      self.capture = True
+                  assert not (tag == 'script' and dict(attrs).get('src')), 'Script externe inattendu'
+              def handle_endtag(self, tag):
+                  if tag == 'script':
+                      self.capture = False
+              def handle_data(self, text):
+                  if self.capture:
+                      self.payload += text
+          parser = Extract()
+          parser.feed(html)
+          data = json.loads(parser.payload)
+          assert data['rows'] and data['features']
+          assert len({r['enrolment'] for r in data['rows']}) == len(data['rows'])
+          for row in data['rows']:
+              assert 0 <= row['risk'] <= 1
+              assert len(row['shap']) == len(data['features']) == len(row['values'])
+              assert math.isclose(row['base'] + sum(row['shap']), row['risk'] * 100, abs_tol=1e-4)
+          users = {r['user'] for r in data['rows']}
+          assert all(u in users for u in data['top'] + data['low'])
+          assert 'data:image/png;base64,' in html
+          assert '__MOODLE_DATA__' not in html and '__GLOBAL_IMAGE__' not in html
+          print(f"Export validé : {len(data['rows'])} inscriptions, {len(users)} stagiaires.")
           PY
 
-      - name: Envoyer uniquement le dossier testé
+      - name: Publier le Space statique
         env:
           HF_TOKEN: ${{ secrets.MOODLE_ABANDON }}
         run: |
           python - <<'PY'
           import os
-          from pathlib import Path
           from huggingface_hub import HfApi
           repo_id = os.environ.get('HF_SPACE_ID', '')
           token = os.environ.get('HF_TOKEN', '')
           if not repo_id or not token:
-              raise SystemExit('Configurez la variable HF_SPACE_ID et le secret MOODLE_ABANDON dans GitHub.')
+              raise SystemExit('Configurez HF_SPACE_ID et le secret MOODLE_ABANDON dans GitHub.')
           api = HfApi(token=token)
           api.repo_info(repo_id=repo_id, repo_type='space')
           api.upload_folder(
-              repo_id=repo_id, repo_type='space',
-              folder_path=Path(os.environ['RUNNER_TEMP']) / 'hf-space',
-              allow_patterns=['app.py', 'demo.parquet', 'README.md', 'requirements.txt'],
-              commit_message='Publication de la démonstration Moodle depuis GitHub Actions',
+              repo_id=repo_id, repo_type='space', folder_path='space-static',
+              allow_patterns=['index.html', 'README.md'],
+              delete_patterns=['app.py', 'demo.parquet', 'requirements.txt'],
+              commit_message='Publier la démonstration statique sans serveur Python ni GPU',
           )
+          info = api.space_info(repo_id)
+          if info.sdk != 'static':
+              raise SystemExit('Le Space doit utiliser le SDK Static HTML. Vérifiez les paramètres du Space.')
           print(f'https://huggingface.co/spaces/{repo_id}')
           PY
