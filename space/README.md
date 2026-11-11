@@ -7,7 +7,7 @@ sdk: gradio
 sdk_version: 6.28.0
 python_version: "3.13"
 app_file: app.py
-short_description: Démonstration sur données synthétiques avec explications SHAP
+short_description: "Abandon à 28 jours : données synthétiques et SHAP"
 ---
 
 # Risque d’abandon à 28 jours — démonstration Moodle
