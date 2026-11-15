@@ -31,6 +31,7 @@ Les risques ne sont pas calibrés sur le terrain et aucune alerte automatique n�
 Deux fichiers suffisent au Space : `index.html` et `README.md`.
 Le HTML inclut les données de démonstration et le graphique global ; il n’utilise
 aucune dépendance externe, aucun serveur Python et aucune ressource GPU.
+Le CSS Bootstrap 5.3.9 est intégré au HTML : aucun chargement depuis un CDN n’est nécessaire.
 Le workflow `.github/workflows/publish-huggingface.yml` reste dans GitHub.
 Il utilise le secret `MOODLE_ABANDON` et la variable `HF_SPACE_ID`.
 
